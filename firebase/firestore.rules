@@ -1,0 +1,40 @@
+// Prototype model: duit30Users/{uid}/profiles/{husband|wife} has
+// schema (1), revision (UUID), chunkCount (1..100), rowCount (1..200000),
+// updatedAt (server timestamp). Immutable revisions contain numbered chunks
+// with schema (1), index (0..99), data (JSON text, at most 200000 characters).
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) {
+      return request.auth != null && request.auth.uid == uid
+        && request.auth.token.email == 'umarislah86@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+    function validProfile(profile) { return profile in ['husband', 'wife']; }
+    function validPointer(data) {
+      return data.keys().hasAll(['schema','revision','chunkCount','rowCount','updatedAt'])
+        && data.keys().hasOnly(['schema','revision','chunkCount','rowCount','updatedAt'])
+        && data.schema == 1 && data.revision is string
+        && data.revision.matches('^[a-zA-Z0-9-]{1,80}$')
+        && data.chunkCount is int && data.chunkCount > 0 && data.chunkCount <= 100
+        && data.rowCount is int && data.rowCount > 0 && data.rowCount <= 200000
+        && data.updatedAt == request.time;
+    }
+    function validChunk(data) {
+      return data.keys().hasAll(['schema','index','data'])
+        && data.keys().hasOnly(['schema','index','data'])
+        && data.schema == 1 && data.index is int && data.index >= 0 && data.index < 100
+        && data.data is string && data.data.size() > 0 && data.data.size() <= 200000;
+    }
+    match /duit30Users/{uid}/profiles/{profile} {
+      allow read: if owner(uid) && validProfile(profile);
+      allow create, update: if owner(uid) && validProfile(profile) && validPointer(request.resource.data);
+      match /revisions/{revision}/chunks/{chunk} {
+        allow read: if owner(uid) && validProfile(profile);
+        allow create: if owner(uid) && validProfile(profile) && validChunk(request.resource.data);
+        allow update, delete: if false;
+      }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
