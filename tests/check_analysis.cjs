@@ -10,3 +10,7 @@ const cycles=['2026-01-05','2026-02-03','2026-03-08','2026-04-04','2026-05-09','
 assert.equal(context.analyseSpending([row('2026-07-02','Expense',100,'Dining Out','Meals')],'month','','2026-07-03').n,0);
 const changed=rows.map(r=>r.category==='Medical'?{...r,amount:-2000}:r);assert.equal(context.analyseSpending(changed,'month','','2026-07-03').expense,3000);
 console.log('PASS: independent budget fixtures, protected expenses, instalments, insufficient cut capacity, incomplete/future exclusions, irregular salary cycles and data-driven recalculation');
+
+a=context.analyseSpending(rows,'month','','2026-07-03','2026-04',3);assert.equal(a.n,3);assert.equal(a.recent[0].start,'2026-01-01');assert.equal(a.recent.at(-1).end,'2026-04-01');assert(!a.data.some(x=>x.date>='2026-04-01'));
+a=context.analyseSpending(cycles,'salary','gaji dxc','2026-07-03','2026-05-09',3);assert.equal(a.n,3);assert.equal(a.recent[0].start,'2026-02-03');assert.equal(a.recent.at(-1).end,'2026-05-09');
+console.log('PASS: selected month and irregular salary cycle anchor the previous 3/6 periods; selected period excluded');
