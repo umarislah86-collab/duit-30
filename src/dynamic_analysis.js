@@ -12,7 +12,8 @@ function analyseSpending(rows,mode='month',source='',today=analysisToday(),ancho
   const latestEnd=latest.slice(0,7)+'-01',end=anchor&&anchor.slice(0,7)+'-01'<latestEnd?anchor.slice(0,7)+'-01':latestEnd;
   for(;start<end;start=shiftMonth(start,1))windows.push({start,end:shiftMonth(start,1),label:start.slice(0,7)});
  }
- const recent=windows.slice(-lookback),previous=windows.slice(-lookback*2,-lookback),n=recent.length;
+ const anchorStart=anchor&&mode==='month'?anchor.slice(0,7)+'-01':null,boundary=anchorStart?shiftMonth(anchorStart,-lookback):null;
+ const recent=boundary?windows.filter(w=>w.start>=boundary&&w.end<=anchorStart):windows.slice(-lookback),previous=boundary?windows.filter(w=>w.start>=shiftMonth(anchorStart,-lookback*2)&&w.end<=boundary):windows.slice(-lookback*2,-lookback),n=recent.length;
  const inWindows=(x,w)=>w.some(p=>x.date>=p.start&&x.date<p.end);
  const data=eligible.filter(x=>inWindows(x,recent)),prior=eligible.filter(x=>inWindows(x,previous));
  const total=(a,type)=>a.filter(x=>x.type===type).reduce((s,x)=>s+Math.abs(x.amount),0);
