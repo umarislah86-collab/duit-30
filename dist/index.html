@@ -29,7 +29,7 @@ body{font-size:16px}.shell{padding:0 16px 40px}.top{padding:18px 0;flex-wrap:wra
 <div class="hero"><div><div class="eyebrow">Personal finance dashboard</div><h1>Find the leaks.<br><span style="color:var(--green)">Cut spending by 30%.</span></h1><p id="heroText">All 3,828 Income, Expense and Transfer entries from the latest Redcoins backup are included. The October goal is to cut monthly recorded expenses by 30% against the latest six complete months.</p></div><div class="hero-note" id="heroNote"><small>SAVE FROM YOUR NEXT PAYCHECK</small><strong>RM200.00</strong><span>Move this into a separate savings account on payday, before paying bills. This is a cautious starting amount, about 3.5% of your average DXC salary. Keep the 30% spending cut as a separate goal.</span></div></div>
 <div class="controls"><label for="profile">Profile</label><select id="profile"><option value="husband">the husband</option><option value="wife">the wife</option><option value="household">the house</option></select><label for="basis">Group by</label><select id="basis"><option value="month">Calendar month</option><option value="salary">Salary cycle</option></select><label for="salarySource">Salary source</label><select id="salarySource"></select><label for="period">View period</label><select id="period"></select><span class="pill" id="periodNote"></span></div>
 <div class="callout" id="profileNote" style="margin-bottom:18px"></div>
-<div class="controls" aria-live="polite"><button class="button secondary" id="cloudLogin">Sign in with Google</button><button class="button secondary" id="cloudLogout" hidden>Sign out</button><span class="fine" id="cloudStatus">Cloud sync loading…</span></div>
+<div class="controls" aria-live="polite"><span class="fine" id="cloudStatus">Cloud sync loading…</span></div>
 <div class="controls"><button class="button" id="importJson">Import new JSON</button><input type="file" id="jsonFile" accept=".json,application/json" hidden><span class="fine" id="importStatus">Replace the husband’s data with a Redcoins backup. Saved on this device and browser.</span></div>
 <div class="grid kpis" id="kpis"></div>
 <section class="section" id="trend"><div class="section-head"><div><h2>Monthly & yearly trends</h2><p>Expenses and income follow the labels in the imported data.</p></div></div><div class="grid twocol"><div class="card chart-card"><div class="chart-title">Month by month</div><div class="chart-sub">Green = Expense, orange = Income. Hover for amounts.</div><div class="bars" id="monthlyBars"></div><div class="legend"><span><i class="dot" style="background:var(--green)"></i>Expenses</span><span><i class="dot" style="background:var(--orange)"></i>Reported income</span></div></div><div class="card chart-card"><div class="chart-title">Where did it go?</div><div class="chart-sub">Expense categories for the selected period.</div><div class="donutrow"><div class="donut" id="donut"><div class="donut-inner" id="donutLabel"></div></div><div class="catlist" id="donutLegend"></div></div></div></div><div class="card section" style="margin-top:16px"><div class="chart-title">Yearly overview</div><div class="chart-sub">2023 starts in July; 2026 includes imported entries through 7 October. Partial years are not directly comparable.</div><div class="year-bars" id="yearBars"></div></div></section>
@@ -84,7 +84,7 @@ document.getElementById('jsonFile').onchange=async event=>{
  }catch(e){setProfileSnapshot(target,previous);if(cloud?.user){try{await cloud.reload(target);}catch(syncError){console.warn(syncError.message);}}document.getElementById('importStatus').textContent='Import failed: '+e.message;}finally{importBusy=false;document.getElementById('importJson').textContent='Import JSON for the '+currentProfile;document.getElementById('importJson').disabled=currentProfile==='household'||!!(cloud?.user&&!cloud.ready);event.target.value='';}
 };
 let importBusy=false;
-function updateImportControls(){const house=currentProfile==='household',cloud=window.duitCloud;document.getElementById('importJson').disabled=house||importBusy||!!(cloud?.user&&!cloud.ready);document.getElementById('importJson').textContent=importBusy?'Importing…':house?'Import new JSON':'Import JSON for the '+currentProfile;document.getElementById('importStatus').textContent=house?'Select the husband or the wife to import their backup.':`Replaces only the ${currentProfile}’s transactions and latest balances. ${cloud?.user?'Saved to your cloud account and synced across signed-in devices.':'Local only. Sign in with Google to sync across devices.'}`;}
+function updateImportControls(){const house=currentProfile==='household',cloud=window.duitCloud;document.getElementById('importJson').disabled=house||importBusy||!!(cloud?.user&&!cloud.ready);document.getElementById('importJson').textContent=importBusy?'Importing…':house?'Import new JSON':'Import JSON for the '+currentProfile;document.getElementById('importStatus').textContent=house?'Select the husband or the wife to import their backup.':`Replaces only the ${currentProfile}’s transactions and latest balances. ${cloud?.user?'Saved to your cloud account and synced across devices.':'Local only. Sign in with Google to sync across devices.'}`;}
 function profileSnapshot(target){return JSON.parse(JSON.stringify({schema:1,rows:target==='wife'?wifeRaw:husbandRaw,balances:target==='wife'?wifeBalances:husbandBalances}));}
 function setProfileSnapshot(target,payload,refresh=true){
  if(!['husband','wife'].includes(target)||payload?.schema!==1||!Array.isArray(payload.rows)||!payload.balances||!['Assets','Liabilities','NET_WORTH'].every(k=>payload.balances[k]))throw new Error('Invalid cloud profile data.');
@@ -160,7 +160,6 @@ window.duitDashboard={snapshot:profileSnapshot,apply:setProfileSnapshot,refresh:
 </script>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDocFromServer, onSnapshot, writeBatch, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseApp = initializeApp({
@@ -169,15 +168,15 @@ const firebaseApp = initializeApp({
   apiKey: 'AIzaSyD51rCgB6aUkZYhPZMxIEa2sOL2e_1APXE',
   authDomain: 'windowsassistant-9b12a.firebaseapp.com'
 });
-const auth = getAuth(firebaseApp), db = getFirestore(firebaseApp, 'duit-30');
+const db = getFirestore(firebaseApp, 'duit-30');
 const dashboard = window.duitDashboard;
 const localProfiles = { husband: dashboard.snapshot('husband'), wife: dashboard.snapshot('wife') };
-const cloud = window.duitCloud = { user: null, ready: false, upload: uploadProfile,
+const cloud = window.duitCloud = { user: {uid:'public-household',email:'shared household'}, ready: false, upload: uploadProfile,
   rememberLocal: (profile, payload) => { localProfiles[profile] = payload; },
   reload: async profile => { if (cloud.user) await receiveProfile(cloud.user.uid, profile, await getDocFromServer(profileRef(cloud.user.uid, profile)), session); }
 };
 const status = document.getElementById('cloudStatus');
-const login = document.getElementById('cloudLogin'), logout = document.getElementById('cloudLogout');
+
 let stops = [], session = 0, uploading = false;
 const revisions = {}, loaded = {}, sequences = {};
 const profiles = ['husband', 'wife'];
@@ -204,7 +203,7 @@ function splitPayload(payload) {
 }
 async function uploadProfile(profile, payload, expectedRevision = revisions[profile] ?? null) {
   const user = cloud.user, activeSession = session;
-  if (!user || !profiles.includes(profile)) throw new Error('Sign in and select a personal profile.');
+  if (!user || !profiles.includes(profile)) throw new Error('Select the husband or the wife.');
   if (!navigator.onLine) throw new Error('You are offline. Reconnect before importing.');
   const chunks = splitPayload(payload), revision = crypto.randomUUID();
   uploading = true; message('Syncing the ' + profile + '…');
@@ -215,7 +214,7 @@ async function uploadProfile(profile, payload, expectedRevision = revisions[prof
       chunks.slice(start, start + 20).forEach((data, offset) => batch.set(chunkRef(user.uid, profile, revision, start + offset), { data, index: start + offset, schema: 1 }));
       await batch.commit();
     }
-    if (session !== activeSession || cloud.user?.uid !== user.uid) throw new Error('Your login changed during import. Please retry.');
+    if (session !== activeSession || cloud.user?.uid !== user.uid) throw new Error('The connection changed during import. Please retry.');
     await runTransaction(db, async transaction => {
       const ref = profileRef(user.uid, profile), current = await transaction.get(ref);
       if ((current.exists() ? current.data().revision : null) !== expectedRevision) throw new Error('Another device updated this profile. Wait for sync, then import again.');
@@ -248,31 +247,9 @@ async function receiveProfile(uid, profile, snapshot, activeSession) {
   dashboard.apply(profile, payload);
   revisions[profile] = meta.revision; loaded[profile] = true; readyState();
 }
-login.onclick = async () => {
-  login.disabled = true;
-  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-  catch (error) { message('Sign-in failed · ' + error.message); }
-  finally { login.disabled = false; }
-};
-logout.onclick = async () => {
-  if (uploading) { message('Wait for the current upload to finish before signing out.'); return; }
-  try { await signOut(auth); } catch (error) { message('Sign-out failed · ' + error.message); }
-};
-onAuthStateChanged(auth, async user => {
-  stops.forEach(stop => stop()); stops = []; session++;
-  cloud.user = null; cloud.ready = false;
-  profiles.forEach(p => { loaded[p] = false; revisions[p] = null; sequences[p] = 0; });
-  if (user && (!['umarislah86@gmail.com', 'norehansalikon@gmail.com'].includes(user.email) || !user.emailVerified)) {
-    message('Use an authorized household Google account to sync.');
-    await signOut(auth); return;
-  }
-  cloud.user = user;
-  login.hidden = !!user; logout.hidden = !user;
+function startCloudSync() {
+  const user=cloud.user;
   dashboard.updateControls();
-  if (!user) {
-    profiles.forEach(p => dashboard.apply(p, localProfiles[p]));
-    message('Local only · sign in with Google to sync across devices'); return;
-  }
   message('Syncing · ' + user.email);
   const activeSession = session;
   profiles.forEach(profile => {
@@ -283,10 +260,10 @@ onAuthStateChanged(auth, async user => {
       });
     }, error => { cloud.ready = false; dashboard.updateControls(); message('Sync failed · ' + error.message); }));
   });
-});
+}
+startCloudSync();
 window.addEventListener('offline', () => message('Offline · reconnect to sync and import'));
 window.addEventListener('online', () => { if (cloud.user) message('Reconnecting to cloud…'); });
-
 </script></body></html>
 
 
