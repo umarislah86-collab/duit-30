@@ -14,3 +14,5 @@ console.log('PASS: independent budget fixtures, protected expenses, instalments,
 a=context.analyseSpending(rows,'month','','2026-07-03','2026-04',3);assert.equal(a.n,3);assert.equal(a.recent[0].start,'2026-01-01');assert.equal(a.recent.at(-1).end,'2026-04-01');assert(!a.data.some(x=>x.date>='2026-04-01'));
 a=context.analyseSpending(cycles,'salary','gaji dxc','2026-07-03','2026-05-09',3);assert.equal(a.n,3);assert.equal(a.recent[0].start,'2026-02-03');assert.equal(a.recent.at(-1).end,'2026-05-09');
 console.log('PASS: selected month and irregular salary cycle anchor the previous 3/6 periods; selected period excluded');
+
+a=context.analyseSpending(rows,'month','','2026-07-03','2026-08',3);assert.equal(a.n,2);assert.equal(a.recent[0].start,'2026-05-01');assert.equal(a.recent.at(-1).end,'2026-07-01');console.log('PASS: unavailable/incomplete selected-month history is not backfilled with older months');
