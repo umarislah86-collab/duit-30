@@ -1,0 +1,76 @@
+function analysisToday(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Singapore',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+function shiftMonth(date,offset){const d=new Date(date.slice(0,7)+'-01T00:00:00Z');d.setUTCMonth(d.getUTCMonth()+offset);return d.toISOString().slice(0,10);}
+function analyseSpending(rows,mode='month',source='',today=analysisToday()){
+ const eligible=rows.filter(x=>x.date<=today).sort((a,b)=>a.date.localeCompare(b.date));
+ const latest=eligible.at(-1)?.date,first=eligible[0]?.date;
+ let windows=[];
+ if(latest&&mode==='salary'){
+  const anchors=[...new Set(eligible.filter(x=>x.type==='Income'&&source&&x.name.toLowerCase().includes(source.toLowerCase())).map(x=>x.date))].sort();
+  windows=anchors.slice(0,-1).map((start,i)=>({start,end:anchors[i+1],label:start+' → '+anchors[i+1]+' (exclusive)'}));
+ }else if(latest){
+  let start=first.slice(0,7)+'-01';if(first.slice(8)!=='01')start=shiftMonth(start,1);
+  const end=latest.slice(0,7)+'-01';
+  for(;start<end;start=shiftMonth(start,1))windows.push({start,end:shiftMonth(start,1),label:start.slice(0,7)});
+ }
+ const recent=windows.slice(-6),previous=windows.slice(-12,-6),n=recent.length;
+ const inWindows=(x,w)=>w.some(p=>x.date>=p.start&&x.date<p.end);
+ const data=eligible.filter(x=>inWindows(x,recent)),prior=eligible.filter(x=>inWindows(x,previous));
+ const total=(a,type)=>a.filter(x=>x.type===type).reduce((s,x)=>s+Math.abs(x.amount),0);
+ const expenseRows=data.filter(x=>x.type==='Expense'),expense=total(data,'Expense')/(n||1),salaryRows=data.filter(x=>x.type==='Income'&&/salary|gaji/i.test(x.name));
+ const salary=total(salaryRows,'Income')/(n||1),repaymentRows=data.filter(x=>x.type==='Transfer'&&/prima|persona/i.test([x.name,x.account,x.notes].join(' ')));
+ const repayment=total(repaymentRows,'Transfer')/(n||1);
+ const entries={};expenseRows.forEach(x=>{(entries[x.category]??=[]).push(x)});
+ const categories=Object.entries(entries).map(([category,items])=>{
+  const average=total(items,'Expense')/(n||1),priorItems=prior.filter(x=>x.type==='Expense'&&x.category===category);
+  const text=categoryLabel(category).toLowerCase();
+  const mandatory=items.some(x=>/spaylater|paylater|instalment|installment|epp|utang|repayment|gintell|sk magic/i.test(x.name));
+  const protectedCategory=/school|education|medical|medicine|insurance|takaful|grocer|fuel|petrol|rent|mortgage|maintenance|repair|family|mi amor|tabung|saving|loan|property|electric|water|utility|phone|mobile|internet|child/i.test(text);
+  const flexible=!mandatory&&!protectedCategory&&/dining|snack|jajan|movie|leisure|play|shopping|shopee|clothing|hobby|gaming|netflix|entertainment|activity/i.test(text);
+  return {category,items,average,count:items.length,priorCount:priorItems.length,ticket:total(items,'Expense')/(items.length||1),priorTicket:total(priorItems,'Expense')/(priorItems.length||1),share:expense?average/expense:0,priorAverage:total(priorItems,'Expense')/(previous.length||1),flexible,classification:mandatory||protectedCategory?'Protected':'Review',capacity:flexible?average*.6:0};
+ }).sort((a,b)=>b.average-a.average);
+ const target=expense*.3,cap=expense*.7,capacity=categories.reduce((s,c)=>s+c.capacity,0),plannedCut=Math.min(target,capacity);
+ categories.forEach(c=>{c.cut=capacity?c.capacity*plannedCut/capacity:0;c.cap=c.average-c.cut;if(c.flexible)c.classification='Flexible candidate';});
+ const room=salary-cap-repayment,safeRoom=salary-(expense-plannedCut)-repayment;
+ // Half of the modelled room stays as a buffer; no unsupported cash surplus claim.
+ const payday=Math.floor(Math.max(0,safeRoom)*.5/10)*10;
+ const periodTotals=recent.map(w=>({...w,total:total(data.filter(x=>x.date>=w.start&&x.date<w.end),'Expense')}));
+ const largest=[...expenseRows].sort((a,b)=>Math.abs(b.amount)-Math.abs(a.amount))[0];
+ const future=rows.filter(x=>x.date>today).length;
+ const repeatGroups={};expenseRows.forEach(x=>{const key=x.name.toLowerCase().trim();if(key)(repeatGroups[key]??=[]).push(x)});
+ const repeats=Object.entries(repeatGroups).map(([name,items])=>({name,items,count:items.length,periods:recent.filter(w=>items.some(x=>x.date>=w.start&&x.date<w.end)).length,average:total(items,'Expense')/(n||1)})).filter(x=>x.periods>=Math.min(3,n)&&n>=2).sort((a,b)=>b.average-a.average);
+ return {recent,previous,n,data,categories,expense,salary,salaryRows,repayment,repaymentRows,target,cap,capacity,plannedCut,shortfall:Math.max(0,target-plannedCut),room,safeRoom,payday,periodTotals,largest,repeats,future,previousExpense:total(prior,'Expense')/(previous.length||1),latest,first,today};
+}
+function renderDynamicAnalysis(){
+ const a=analyseSpending(tx,basis,salarySource),unit=basis==='salary'?'salary cycle':'month',who=currentProfile==='household'?'the house':'the '+currentProfile;
+ const windowText=a.n?`${a.recent[0].start} to ${a.recent.at(-1).end} (end exclusive) · ${a.n} complete ${unit}${a.n===1?'':'s'}`:'No complete periods available';
+ const note=`${who} · ${windowText}. Recent analysis uses up to six complete periods; the period filter applies to charts and the ledger. Partial and future-dated records are excluded from this baseline${a.future?` (${a.future} future entries excluded)`:''}. Zero-activity periods inside the recorded range count as zero; missing exports cannot be detected.`;
+ document.getElementById('analysisWindow').textContent=note;
+ document.getElementById('heroText').textContent=`${who}: ${tx.length.toLocaleString()} recorded transactions. Analysis updates with imports, cloud sync, profile and grouping changes.`;
+ if(!a.n){
+  document.getElementById('diagnosisCards').innerHTML='<div class="card insight"><h3>More data needed</h3><p>Import a longer history, or select calendar months if there are no complete salary cycles. No savings amount or spending cut is estimated from an incomplete period.</p></div>';
+  document.getElementById('dynamicMission').innerHTML='<div class="callout"><strong>30% plan needs a complete baseline</strong><span>Current or future transactions remain visible in the ledger.</span></div>';
+  document.getElementById('heroNote').innerHTML='<small>PAYDAY SAVINGS</small><strong>Not enough data</strong><span>A complete period is needed to calculate a proposal.</span>';
+  document.getElementById('profileNote').textContent=note;return;
+ }
+ const cards=[],top=a.categories[0],flex=a.categories.filter(c=>c.flexible).sort((x,y)=>y.cut-x.cut)[0];
+ const card=(title,text,kind='')=>cards.push(`<div class="card insight ${kind}"><h3>${title}</h3><p>${text}</p></div>`);
+ if(top)card('Largest spending category',`<b>${escapeHtml(categoryLabel(top.category))}</b>: ${fmt(top.average)}/${unit}, ${(top.share*100).toFixed(1)}% of expenses, ${top.count} entries. ${top.flexible?'A candidate for reducing discretionary spending.':'Protected or awaiting review; its size alone does not establish waste.'}`);
+ if(flex)card('Largest proposed cut',`<b>${escapeHtml(categoryLabel(flex.category))}</b>: ${fmt(flex.average)} → ${fmt(flex.cap)}/${unit}, a proposed cut of <b>${fmt(flex.cut)}</b>. Flexible classification is inferred from labels; check for essential purchases.`,'red');
+ else card('No confirmed flexible categories','The labels do not identify discretionary spending confidently. Review categories before allocating cuts.','red');
+ if(a.previous.length===a.n){const change=a.expense-a.previousExpense;card('Change from the preceding baseline',`Expenses ${change>=0?'increased':'decreased'} by <b>${fmt(Math.abs(change))}/${unit}</b>${a.previousExpense?` (${(Math.abs(change)/a.previousExpense*100).toFixed(1)}%)`:''} versus the preceding ${a.previous.length} complete periods. Prior average: ${fmt(a.previousExpense)}.`);}
+ else card('Comparison coverage',`There are ${a.previous.length} earlier complete periods versus ${a.n} recent periods. A like-for-like trend comparison is unavailable.`);
+ const rising=a.categories.filter(c=>a.previous.length===a.n&&c.average>c.priorAverage).sort((x,y)=>(y.average-y.priorAverage)-(x.average-x.priorAverage))[0];
+ if(rising)card('Category with the largest increase',`${escapeHtml(categoryLabel(rising.category))}: ${fmt(rising.priorAverage)} → ${fmt(rising.average)}/${unit}. Entry frequency: ${(rising.priorCount/a.n).toFixed(1)} → ${(rising.count/a.n).toFixed(1)}/${unit}; average amount per entry: ${fmt(rising.priorTicket)} → ${fmt(rising.ticket)}. ${rising.priorCount?'These changes show whether frequency, amount per entry, or both contributed.':'This category has no expenses in the preceding baseline.'}`,'red');
+ const peak=[...a.periodTotals].sort((x,y)=>y.total-x.total)[0];
+ if(peak)card('Most expensive complete period',`${escapeHtml(peak.label)}: <b>${fmt(peak.total)}</b>. ${a.largest?`Largest single expense in the baseline: ${escapeHtml(a.largest.name)}, ${fmt(Math.abs(a.largest.amount))} on ${a.largest.date}. A large purchase is not automatically recurring.`:''}`);
+ if(a.repeats[0]){const r=a.repeats[0];card('Repeated spending to review',`${escapeHtml(r.items[0].name)} appears ${r.count} times in ${r.periods}/${a.n} periods, averaging <b>${fmt(r.average)}/${unit}</b>. Repeated names suggest a pattern, not proof of a subscription.`);}
+ card('Income and repayment check',`Salary-labelled income: <b>${fmt(a.salary)}/${unit}</b> from ${a.salaryRows.length} entries. Other reported income: ${fmt((sum(a.data,'Income')/a.n)-a.salary)}/${unit}; it is excluded from the payday model. Identified Prima / Persona transfer repayments: <b>${fmt(a.repayment)}/${unit}</b>. Other transfers require review; savings and card payoffs may repeat recorded activity.`);
+ card('Can this plan reach 30%?',a.shortfall>.01?`Proposed cuts total <b>${fmt(a.plannedCut)}</b>, leaving <b>${fmt(a.shortfall)}</b> still to find. The 30% target is not yet supported by the identified flexible categories.`:`Identified flexible categories can cover the <b>${fmt(a.target)}</b> target under the proposed caps. Confirm these cuts are practical before committing.`,a.shortfall>.01?'red':'green');
+ document.getElementById('diagnosisCards').innerHTML=cards.join('');
+ const next=shiftMonth(a.today,1),days=new Date(Number(next.slice(0,4)),Number(next.slice(5,7)),0).getDate();
+ const plannedExpense=a.expense-a.plannedCut;
+ document.getElementById('dynamicMission').innerHTML=`<div class="target"><div><div class="eyebrow" style="color:var(--lime)">${basis==='salary'?'Next salary cycle':next.slice(0,7)} · ${escapeHtml(who)}</div><h2>Spend 30% less.<br>Cut ${fmt(a.target)}.</h2><p>Baseline: ${fmt(a.expense)}/${unit}. Target expense cap: <b>${fmt(a.cap)}</b>. The reduction is 30% of recorded expenses. Transfer repayments remain separate. ${a.shortfall>.01?`Current proposals fall ${fmt(a.shortfall)} short; this is a target, not an achieved plan.`:'The category proposals below allocate the required cut.'}</p></div><div class="target-metrics">${[['Baseline / '+unit,a.expense],['30% expense cap',a.cap],['Proposed reduction',a.plannedCut],['Unallocated reduction',a.shortfall]].map(([l,v])=>`<div class="metric"><small>${l}</small><strong>${fmt(v)}</strong></div>`).join('')}</div></div><div class="callout" style="margin-top:16px"><strong>Provisional payday saving: ${fmt(a.payday)}</strong><span class="fine">${fmt(a.salary)} salary − ${fmt(plannedExpense)} expenses under the supported category plan − ${fmt(a.repayment)} identified repayment transfers = ${fmt(a.safeRoom)} modelled room/${unit}. Suggested saving uses half of positive room, rounded down to RM10; the other half stays as a buffer. This is a planning rule, not a verified bank surplus. Confirm all remaining bills and transfers first. ${a.shortfall>.01?'It uses the achievable proposed spending level rather than assuming the full 30% cut.':''}</span></div><div class="card" style="margin-top:16px"><div class="chart-title">Category caps calculated from your data</div><p class="fine">Up to 60% reduction in label-identified flexible categories, scaled down when less is needed. Protected and unknown categories receive no automatic cut. Instalments and loan-labelled items protect the entire category until reviewed.</p><div class="tablewrap"><table class="plan-table" style="min-width:650px"><thead><tr><th>Category</th><th>Classification</th><th>Average / ${unit}</th><th>Proposed cap</th><th>Reduction</th></tr></thead><tbody id="planRows">${a.categories.map(c=>`<tr><td>${escapeHtml(categoryLabel(c.category))}</td><td>${c.classification}</td><td>${fmt(c.average)}</td><td>${fmt(c.cap)}</td><td>${fmt(c.cut)}</td></tr>`).join('')}<tr style="background:#eff6d9;font-weight:900"><td>Total</td><td>${a.shortfall>.01?'Target not yet covered':'Target allocated'}</td><td>${fmt(a.expense)}</td><td>${fmt(plannedExpense)}</td><td>${fmt(a.plannedCut)}</td></tr></tbody></table></div></div><div class="callout" style="margin-top:16px"><strong>Rules for the next period</strong><span class="fine">Review the largest flexible category weekly. Track all expenses against ${fmt(a.cap)}/${unit}; ${basis==='month'?`the rough daily equivalent for ${next.slice(0,7)} is ${fmt(a.cap/days)}.`:'cycle length depends on actual pay dates, so no fixed daily allowance is assumed.'} Keep required healthcare, school, repairs and contractual repayments funded. Unknown categories and unmatched transfers need review before increasing payday savings.</span></div><p class="smallprint">Deterministic analysis from recorded transactions; no AI-generated claims. <a href="https://www.consumerfinance.gov/documents/10038/cfpb_creating-cash-flow-budget_tool_2021-08.pdf" target="_blank" rel="noopener">Cash-flow budgeting reference</a>. Classification, the 60% maximum cut and the 50% room buffer are app planning assumptions.</p>`;
+ document.getElementById('heroNote').innerHTML=`<small>PROVISIONAL PAYDAY SAVING · ${escapeHtml(who)}</small><strong>${fmt(a.payday)}</strong><span>Calculated from salary-labelled income, proposed category spending and identified repayments. ${a.shortfall>.01?`The 30% cut still needs ${fmt(a.shortfall)} of additional reductions.`:'Check remaining commitments before transferring this amount.'}</span>`;
+ const value=(b,k,date)=>b[k]?.[date]||0,asset=currentProfile==='household'?value(husbandBalances,'Assets','2026-10-02')+value(wifeBalances,'Assets','2026-09-20'):value(balances,'Assets',currentProfile==='wife'?'2026-09-20':'2026-10-02'),debt=currentProfile==='household'?value(husbandBalances,'Liabilities','2026-10-02')+value(wifeBalances,'Liabilities','2026-09-20'):value(balances,'Liabilities',currentProfile==='wife'?'2026-09-20':'2026-10-02');
+ document.getElementById('profileNote').innerHTML=`<strong>${escapeHtml(who)} · ${escapeHtml(windowText)}</strong><span class="fine">Salary-labelled income: <b>${fmt(a.salary)}/${unit}</b>. Recorded expenses: <b>${fmt(a.expense)}/${unit}</b>. Largest category: <b>${escapeHtml(categoryLabel(top?.category||'None'))}</b>. 30% target: <b>${fmt(a.target)}</b>; proposed cuts: <b>${fmt(a.plannedCut)}</b>. Latest assets: <b>${fmt(asset)}</b>, liabilities: <b>${fmt(Math.abs(debt))}</b>, net worth: <b>${fmt(asset+debt)}</b>. ${currentProfile==='household'?'Identified spouse receipts/payments are excluded using name-based matching; unmatched internal movements may remain.':''}</span>`;
+}
