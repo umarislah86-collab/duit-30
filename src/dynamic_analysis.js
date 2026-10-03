@@ -42,6 +42,8 @@ function analyseSpending(rows,mode='month',source='',today=analysisToday(),ancho
  return {recent,previous,n,data,categories,expense,salary,salaryRows,repayment,repaymentRows,target,cap,capacity,plannedCut,shortfall:Math.max(0,target-plannedCut),room,safeRoom,payday,periodTotals,largest,repeats,future,previousExpense:total(prior,'Expense')/(previous.length||1),latest,first,today};
 }
 function renderDynamicAnalysis(){
+ const promptPanel=document.getElementById('aiPromptPanel');if(promptPanel)promptPanel.hidden=true;
+
  const actualToday=analysisToday(),lastDate=rows=>rows.filter(x=>x.date<=actualToday).map(x=>x.date).sort().at(-1),houseCoverage=currentProfile==='household'?[lastDate(husbandTx),lastDate(wifeTx)].filter(Boolean).sort()[0]:null;
  const analysisRows=houseCoverage?tx.filter(x=>x.date<=houseCoverage):tx;
  const chosen=period.value,anchor=chosen!=='all'&&chosen.length>4?chosen:null;
