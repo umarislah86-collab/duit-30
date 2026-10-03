@@ -1,13 +1,13 @@
-// Prototype model: duit30Users/{uid}/profiles/{husband|wife} has
+// Prototype model: duit30Households/{household}/profiles/{husband|wife} has
 // schema (1), revision (UUID), chunkCount (1..100), rowCount (1..200000),
 // updatedAt (server timestamp). Immutable revisions contain numbered chunks
 // with schema (1), index (0..99), data (JSON text, at most 200000 characters).
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function owner(uid) {
-      return request.auth != null && request.auth.uid == uid
-        && request.auth.token.email == 'umarislah86@gmail.com'
+    function member(household) {
+      return request.auth != null && household == 'main'
+        && request.auth.token.email in ['umarislah86@gmail.com', 'norehansalikon@gmail.com']
         && request.auth.token.email_verified == true;
     }
     function validProfile(profile) { return profile in ['husband', 'wife']; }
@@ -26,12 +26,12 @@ service cloud.firestore {
         && data.schema == 1 && data.index is int && data.index >= 0 && data.index < 100
         && data.data is string && data.data.size() > 0 && data.data.size() <= 200000;
     }
-    match /duit30Users/{uid}/profiles/{profile} {
-      allow read: if owner(uid) && validProfile(profile);
-      allow create, update: if owner(uid) && validProfile(profile) && validPointer(request.resource.data);
+    match /duit30Households/{household}/profiles/{profile} {
+      allow read: if member(household) && validProfile(profile);
+      allow create, update: if member(household) && validProfile(profile) && validPointer(request.resource.data);
       match /revisions/{revision}/chunks/{chunk} {
-        allow read: if owner(uid) && validProfile(profile);
-        allow create: if owner(uid) && validProfile(profile) && validChunk(request.resource.data);
+        allow read: if member(household) && validProfile(profile);
+        allow create: if member(household) && validProfile(profile) && validChunk(request.resource.data);
         allow update, delete: if false;
       }
     }
