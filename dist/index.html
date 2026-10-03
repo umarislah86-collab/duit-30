@@ -29,6 +29,7 @@ body{font-size:16px}.shell{padding:0 16px 40px}.top{padding:18px 0;flex-wrap:wra
 <div class="hero"><div><div class="eyebrow">Personal finance dashboard</div><h1>Find the leaks.<br><span style="color:var(--green)">Cut spending by 30%.</span></h1><p id="heroText">All 3,828 Income, Expense and Transfer entries from the latest Redcoins backup are included. The October goal is to cut monthly recorded expenses by 30% against the latest six complete months.</p></div><div class="hero-note" id="heroNote"><small>SAVE FROM YOUR NEXT PAYCHECK</small><strong>RM200.00</strong><span>Move this into a separate savings account on payday, before paying bills. This is a cautious starting amount, about 3.5% of your average DXC salary. Keep the 30% spending cut as a separate goal.</span></div></div>
 <div class="controls"><label for="profile">Profile</label><select id="profile"><option value="husband">the husband</option><option value="wife">the wife</option><option value="household">the house</option></select><label for="basis">Group by</label><select id="basis"><option value="month">Calendar month</option><option value="salary">Salary cycle</option></select><label for="salarySource">Salary source</label><select id="salarySource"></select><label for="period">View period</label><select id="period"></select><span class="pill" id="periodNote"></span></div>
 <div class="callout" id="profileNote" style="margin-bottom:18px"></div>
+<div class="controls" aria-live="polite"><button class="button secondary" id="cloudLogin">Sign in with Google</button><button class="button secondary" id="cloudLogout" hidden>Sign out</button><span class="fine" id="cloudStatus">Cloud sync loading…</span></div>
 <div class="controls"><button class="button" id="importJson">Import new JSON</button><input type="file" id="jsonFile" accept=".json,application/json" hidden><span class="fine" id="importStatus">Replace the husband’s data with a Redcoins backup. Saved on this device and browser.</span></div>
 <div class="grid kpis" id="kpis"></div>
 <section class="section" id="trend"><div class="section-head"><div><h2>Monthly & yearly trends</h2><p>Expenses and income follow the labels in the imported data.</p></div></div><div class="grid twocol"><div class="card chart-card"><div class="chart-title">Month by month</div><div class="chart-sub">Green = Expense, orange = Income. Hover for amounts.</div><div class="bars" id="monthlyBars"></div><div class="legend"><span><i class="dot" style="background:var(--green)"></i>Expenses</span><span><i class="dot" style="background:var(--orange)"></i>Reported income</span></div></div><div class="card chart-card"><div class="chart-title">Where did it go?</div><div class="chart-sub">Expense categories for the selected period.</div><div class="donutrow"><div class="donut" id="donut"><div class="donut-inner" id="donutLabel"></div></div><div class="catlist" id="donutLegend"></div></div></div></div><div class="card section" style="margin-top:16px"><div class="chart-title">Yearly overview</div><div class="chart-sub">2023 starts in July; 2026 includes imported entries through 7 October. Partial years are not directly comparable.</div><div class="year-bars" id="yearBars"></div></div></section>
@@ -68,19 +69,40 @@ let pendingImportProfile='husband';
 document.getElementById('importJson').onclick=()=>{if(currentProfile==='household')return;pendingImportProfile=currentProfile;document.getElementById('jsonFile').click();};
 document.getElementById('jsonFile').onchange=async event=>{
  const file=event.target.files?.[0];if(!file)return;
- const target=pendingImportProfile;
- try{const backup=JSON.parse(await file.text());
-  const targetBalances=target==='wife'?wifeBalances:husbandBalances,previous=JSON.parse(JSON.stringify(targetBalances)),previousRows=target==='wife'?wifeRaw:husbandRaw;
-  try{applyBackup(backup,target);localStorage.setItem(importKeys[target],JSON.stringify(backup));}catch(e){if(target==='wife')wifeRaw=previousRows;else husbandRaw=previousRows;for(const k of Object.keys(targetBalances))delete targetBalances[k];Object.assign(targetBalances,previous);throw e;}
-  location.search='?profile='+target;
- }catch(e){document.getElementById('importStatus').textContent='Import failed: '+e.message;}finally{event.target.value='';}
+ const target=pendingImportProfile,cloud=window.duitCloud;
+ const previous=profileSnapshot(target);
+ try{
+  if(cloud?.user&&!cloud.ready)throw new Error('Wait for cloud sync to finish before importing.');
+  if(importBusy)throw new Error('An import is already running.');
+  importBusy=true;updateImportControls();
+  const backup=JSON.parse(await file.text());applyBackup(backup,target);
+  const payload=profileSnapshot(target);
+  setProfileSnapshot(target,previous,false);
+  if(cloud?.user){await cloud.upload(target,payload);setProfileSnapshot(target,payload);}
+  else{localStorage.setItem(importKeys[target],JSON.stringify(backup));setProfileSnapshot(target,payload);cloud?.rememberLocal(target,payload);}
+  importedBackups[target]=true;updateImportControls();
+ }catch(e){setProfileSnapshot(target,previous);if(cloud?.user){try{await cloud.reload(target);}catch(syncError){console.warn(syncError.message);}}document.getElementById('importStatus').textContent='Import failed: '+e.message;}finally{importBusy=false;document.getElementById('importJson').textContent='Import JSON for the '+currentProfile;document.getElementById('importJson').disabled=currentProfile==='household'||!!(cloud?.user&&!cloud.ready);event.target.value='';}
 };
-function updateImportControls(){const house=currentProfile==='household';document.getElementById('importJson').disabled=house;document.getElementById('importJson').textContent=house?'Import new JSON':'Import JSON for the '+currentProfile;document.getElementById('importStatus').textContent=house?'Select the husband or the wife to import their backup.':`Replaces only the ${currentProfile}’s transactions and latest balances. ${importedBackups[currentProfile]?'Imported backup active. ':''}Saved on this device and browser; other devices keep their own data.`;}
-const husbandTx=husbandRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'You'}));
-const wifeTx=wifeRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'Wife'}));
+let importBusy=false;
+function updateImportControls(){const house=currentProfile==='household',cloud=window.duitCloud;document.getElementById('importJson').disabled=house||importBusy||!!(cloud?.user&&!cloud.ready);document.getElementById('importJson').textContent=importBusy?'Importing…':house?'Import new JSON':'Import JSON for the '+currentProfile;document.getElementById('importStatus').textContent=house?'Select the husband or the wife to import their backup.':`Replaces only the ${currentProfile}’s transactions and latest balances. ${cloud?.user?'Saved to your cloud account and synced across signed-in devices.':'Local only. Sign in with Google to sync across devices.'}`;}
+function profileSnapshot(target){return JSON.parse(JSON.stringify({schema:1,rows:target==='wife'?wifeRaw:husbandRaw,balances:target==='wife'?wifeBalances:husbandBalances}));}
+function setProfileSnapshot(target,payload,refresh=true){
+ if(!['husband','wife'].includes(target)||payload?.schema!==1||!Array.isArray(payload.rows)||!payload.balances||!['Assets','Liabilities','NET_WORTH'].every(k=>payload.balances[k]))throw new Error('Invalid cloud profile data.');
+ const targetBalances=target==='wife'?wifeBalances:husbandBalances;for(const k of Object.keys(targetBalances))delete targetBalances[k];Object.assign(targetBalances,payload.balances);
+ if(target==='wife')wifeRaw=payload.rows;else husbandRaw=payload.rows;
+ if(refresh)rebuildProfiles();
+}
+function rebuildProfiles(){
+ husbandTx=husbandRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'You'}));wifeTx=wifeRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'Wife'}));householdTx=[...husbandTx.filter(x=>!internalHusband(x)),...wifeTx.filter(x=>!internalWife(x))];
+ const previousPeriod=period.value;tx=currentProfile==='wife'?wifeTx:currentProfile==='household'?householdTx:husbandTx;balances=currentProfile==='wife'?wifeBalances:husbandBalances;
+ refreshSelectors();if(previousPeriod==='all'||years.includes(previousPeriod)||months.includes(previousPeriod))period.value=previousPeriod;
+ renderBalances();render();updateProfileBrief();updateImportControls();document.getElementById('heroText').textContent=currentProfile==='household'?'Combined household activity after removing identified family movements.':`The ${currentProfile}: ${tx.length.toLocaleString()} transaction rows. Calendar month and actual salary cycle analysis.`;
+}
+let husbandTx=husbandRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'You'}));
+let wifeTx=wifeRaw.filter(x=>x.type!=='Opening').map(x=>({...x,owner:'Wife'}));
 const internalHusband=x=>x.type==='Expense'&&(x.category==='Mi Amor'||x.category==='Tabungan')&&/(ayg|aalaa|aafiyah|tabung mae|taska|tadika)/i.test(x.name);
 const internalWife=x=>x.type==='Income'&&/^(abg |fahm y bagi)/i.test(x.name);
-const householdTx=[...husbandTx.filter(x=>!internalHusband(x)),...wifeTx.filter(x=>!internalWife(x))];
+let householdTx=[...husbandTx.filter(x=>!internalHusband(x)),...wifeTx.filter(x=>!internalWife(x))];
 let tx=husbandTx,balances=husbandBalances,currentProfile='husband',basis='month',salarySource='gaji dxc';
 const fmt=n=>(Number(n||0)<0?'-':'')+'RM'+Math.abs(Number(n||0)).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2});
 function updateProfileBrief(){
@@ -115,7 +137,7 @@ document.getElementById('catFilter').innerHTML+='<option value="all">All categor
 document.getElementById('accountFilter').innerHTML+=accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
 document.getElementById('accountSelect').innerHTML=accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
 document.getElementById('accountSelect').value='Cimb Platinum';
-function refreshSelectors(){months=periodKeys();years=[...new Set(tx.map(x=>x.date.slice(0,4)))].sort();cats=[...new Set(tx.map(x=>x.category))].sort();accounts=[...new Set(tx.map(x=>x.account))].sort();let sources=sourceOptions();document.getElementById('salarySource').innerHTML=sources.length?sources.map(x=>`<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join():'<option value="">No salary entries found</option>';document.getElementById('salarySource').value=sources.includes(salarySource)?salarySource:(sources[0]||'');period.innerHTML='<option value="all">All records</option>'+years.map(y=>`<option value="${y}">${y}${y===years[0]?' (partial)':''}</option>`).join('')+'<optgroup label="Periods">'+months.slice().reverse().map(m=>`<option value="${m}">${escapeHtml(periodLabel(m))}</option>`).join('')+'</optgroup>';period.value=basis==='salary'?(months.at(-1)||'all'):(months.includes('2026-01')?'2026':'all');document.getElementById('catFilter').innerHTML='<option value="all">All categories</option>'+cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(categoryLabel(c))}</option>`).join('');document.getElementById('accountFilter').innerHTML='<option value="all">All accounts</option>'+accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');document.getElementById('accountSelect').innerHTML=accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');document.getElementById('accountSelect').value=accounts.includes('Cimb Platinum')?'Cimb Platinum':accounts[0];document.querySelector('#trend .chart-title').textContent=basis==='salary'?'Salary cycle by cycle':'Month by month';document.querySelector('#trend .chart-sub').textContent=basis==='salary'?'Each period starts on the actual selected salary transaction date.':'Calendar month totals.';document.querySelector('#monthlyTable').closest('.card').querySelector('.chart-title').textContent=basis==='salary'?'Salary cycle totals':'Monthly totals';}
+function refreshSelectors(){sourceOptions();months=periodKeys();years=[...new Set(tx.map(x=>x.date.slice(0,4)))].sort();cats=[...new Set(tx.map(x=>x.category))].sort();accounts=[...new Set(tx.map(x=>x.account))].sort();let sources=sourceOptions();document.getElementById('salarySource').innerHTML=sources.length?sources.map(x=>`<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join():'<option value="">No salary entries found</option>';document.getElementById('salarySource').value=sources.includes(salarySource)?salarySource:(sources[0]||'');period.innerHTML='<option value="all">All records</option>'+years.map(y=>`<option value="${y}">${y}${y===years[0]?' (partial)':''}</option>`).join('')+'<optgroup label="Periods">'+months.slice().reverse().map(m=>`<option value="${m}">${escapeHtml(periodLabel(m))}</option>`).join('')+'</optgroup>';period.value=basis==='salary'?(months.at(-1)||'all'):(months.includes('2026-01')?'2026':'all');document.getElementById('catFilter').innerHTML='<option value="all">All categories</option>'+cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(categoryLabel(c))}</option>`).join('');document.getElementById('accountFilter').innerHTML='<option value="all">All accounts</option>'+accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');document.getElementById('accountSelect').innerHTML=accounts.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');document.getElementById('accountSelect').value=accounts.includes('Cimb Platinum')?'Cimb Platinum':accounts[0];document.querySelector('#trend .chart-title').textContent=basis==='salary'?'Salary cycle by cycle':'Month by month';document.querySelector('#trend .chart-sub').textContent=basis==='salary'?'Each period starts on the actual selected salary transaction date.':'Calendar month totals.';document.querySelector('#monthlyTable').closest('.card').querySelector('.chart-title').textContent=basis==='salary'?'Salary cycle totals':'Monthly totals';}
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function selected(){let p=period.value;return tx.filter(x=>p==='all'||(basis==='salary'?cycleKey(x.date)===p:x.date.startsWith(p)))}
 function sum(a,type){return a.filter(x=>x.type===type).reduce((s,x)=>s+(type==='Expense'?-x.amount:x.amount),0)}
@@ -134,6 +156,137 @@ const baseline=tx.filter(x=>x.date>='2026-03-01'&&x.date<'2026-09-01'&&x.type===
 const plan=[['Dining Out',monthly(x=>x.category==='Dining Out'),250],['Snacks & Drinks',monthly(x=>x.category==='Jajan Dan Air'),30],['New purchases*',monthly(x=>['Hardwares','Shopee','Clothing','Hobby','Gaming'].includes(x.category)&&!x.name.toLowerCase().includes('spaylater')),50],['Activity excluding Gintell',monthly(x=>x.category==='Activity'&&!x.name.toLowerCase().includes('gintell')),0],['Movies',monthly(x=>x.category==='Movies'),0],['Others',monthly(x=>x.category==='Others'),0],['Grocery',monthly(x=>x.category==='Grocery'),300],['Maintenance / repairs',monthly(x=>x.category==='Maintenance'),200]];
 document.getElementById('planRows').innerHTML=plan.map(x=>`<tr><td><b>${escapeHtml(x[0])}</b></td><td>${fmt(x[1])}</td><td>${fmt(x[2])}</td><td style="color:var(--green);font-weight:900">${fmt(x[1]-x[2])}</td></tr>`).join('')+`<tr style="background:#eff6d9;font-weight:900"><td>Plan total</td><td>${fmt(plan.reduce((s,x)=>s+x[1],0))}</td><td>${fmt(plan.reduce((s,x)=>s+x[2],0))}</td><td>${fmt(plan.reduce((s,x)=>s+x[1]-x[2],0))}</td></tr>`;
 refreshSelectors();document.getElementById('profileNote').innerHTML='<strong>the husband</strong><span class="fine">Original personal analysis. Switch to the wife or the house above.</span>';renderBalances();render();updateProfileBrief();updateImportControls();const initialProfile=new URLSearchParams(location.search).get('profile');if(['wife','household'].includes(initialProfile)){document.getElementById('profile').value=initialProfile;document.getElementById('profile').dispatchEvent(new Event('change'))}
+window.duitDashboard={snapshot:profileSnapshot,apply:setProfileSnapshot,refresh:rebuildProfiles,updateControls:updateImportControls};
+</script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getFirestore, doc, getDocFromServer, onSnapshot, writeBatch, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+
+const firebaseApp = initializeApp({
+  projectId: 'windowsassistant-9b12a',
+  appId: '1:442186858634:web:63cdf1d938fe507c216d73',
+  apiKey: 'AIzaSyD51rCgB6aUkZYhPZMxIEa2sOL2e_1APXE',
+  authDomain: 'windowsassistant-9b12a.firebaseapp.com'
+});
+const auth = getAuth(firebaseApp), db = getFirestore(firebaseApp, 'duit-30');
+const dashboard = window.duitDashboard;
+const localProfiles = { husband: dashboard.snapshot('husband'), wife: dashboard.snapshot('wife') };
+const cloud = window.duitCloud = { user: null, ready: false, upload: uploadProfile,
+  rememberLocal: (profile, payload) => { localProfiles[profile] = payload; },
+  reload: async profile => { if (cloud.user) await receiveProfile(cloud.user.uid, profile, await getDocFromServer(profileRef(cloud.user.uid, profile)), session); }
+};
+const status = document.getElementById('cloudStatus');
+const login = document.getElementById('cloudLogin'), logout = document.getElementById('cloudLogout');
+let stops = [], session = 0, uploading = false;
+const revisions = {}, loaded = {}, sequences = {};
+const profiles = ['husband', 'wife'];
+function message(text) { status.textContent = text; }
+function readyState() {
+  cloud.ready = profiles.every(p => loaded[p]);
+  dashboard.updateControls();
+  if (cloud.ready && !uploading) message('Synced · ' + cloud.user.email + ' · both profiles');
+}
+function profileRef(uid, profile) { return doc(db, 'duit30Users', uid, 'profiles', profile); }
+function chunkRef(uid, profile, revision, index) {
+  return doc(db, 'duit30Users', uid, 'profiles', profile, 'revisions', revision, 'chunks', String(index));
+}
+function splitPayload(payload) {
+  // 100k UTF-16 units stay well below the Firestore 1 MiB document limit.
+  const text = JSON.stringify(payload), chunks = [];
+  for (let start = 0; start < text.length;) {
+    let end = Math.min(text.length, start + 100000);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+    chunks.push(text.slice(start, end)); start = end;
+  }
+  if (chunks.length > 100) throw new Error('Backup too large (maximum approximately 10 MB).');
+  return chunks;
+}
+async function uploadProfile(profile, payload, expectedRevision = revisions[profile] ?? null) {
+  const user = cloud.user, activeSession = session;
+  if (!user || !profiles.includes(profile)) throw new Error('Sign in and select a personal profile.');
+  if (!navigator.onLine) throw new Error('You are offline. Reconnect before importing.');
+  const chunks = splitPayload(payload), revision = crypto.randomUUID();
+  uploading = true; message('Syncing the ' + profile + '…');
+  try {
+    // Immutable versions are staged first. Only the pointer switches atomically.
+    for (let start = 0; start < chunks.length; start += 20) {
+      const batch = writeBatch(db);
+      chunks.slice(start, start + 20).forEach((data, offset) => batch.set(chunkRef(user.uid, profile, revision, start + offset), { data, index: start + offset, schema: 1 }));
+      await batch.commit();
+    }
+    if (session !== activeSession || cloud.user?.uid !== user.uid) throw new Error('Your login changed during import. Please retry.');
+    await runTransaction(db, async transaction => {
+      const ref = profileRef(user.uid, profile), current = await transaction.get(ref);
+      if ((current.exists() ? current.data().revision : null) !== expectedRevision) throw new Error('Another device updated this profile. Wait for sync, then import again.');
+      transaction.set(ref, { schema: 1, revision, chunkCount: chunks.length, rowCount: payload.rows.length, updatedAt: serverTimestamp() });
+    });
+    revisions[profile] = revision;
+    message('Synced · the ' + profile + ' · ' + new Date().toLocaleTimeString());
+  } catch (error) { message('Sync failed · ' + error.message); throw error; }
+  finally { uploading = false; }
+}
+async function receiveProfile(uid, profile, snapshot, activeSession) {
+  const sequence = sequences[profile] = (sequences[profile] || 0) + 1;
+  const current = () => session === activeSession && sequences[profile] === sequence;
+  if (!snapshot.exists()) {
+    // First use migrates this device's data. Existing cloud data always wins.
+    try { await uploadProfile(profile, localProfiles[profile], null); }
+    catch (error) { if (current()) message('Initial sync failed · ' + error.message); }
+    return;
+  }
+  const meta = snapshot.data();
+  if (meta.schema !== 1 || !Number.isInteger(meta.chunkCount) || meta.chunkCount < 1 || meta.chunkCount > 100) throw new Error('Invalid cloud version.');
+  const chunks = await Promise.all(Array.from({ length: meta.chunkCount }, (_, index) => getDocFromServer(chunkRef(uid, profile, meta.revision, index))));
+  if (!current()) return;
+  const text = chunks.map((chunk, index) => {
+    if (!chunk.exists() || chunk.data().index !== index || typeof chunk.data().data !== 'string') throw new Error('Incomplete cloud version.');
+    return chunk.data().data;
+  }).join('');
+  const payload = JSON.parse(text);
+  if (payload.rows?.length !== meta.rowCount) throw new Error('Cloud transaction count mismatch.');
+  dashboard.apply(profile, payload);
+  revisions[profile] = meta.revision; loaded[profile] = true; readyState();
+}
+login.onclick = async () => {
+  login.disabled = true;
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (error) { message('Sign-in failed · ' + error.message); }
+  finally { login.disabled = false; }
+};
+logout.onclick = async () => {
+  if (uploading) { message('Wait for the current upload to finish before signing out.'); return; }
+  try { await signOut(auth); } catch (error) { message('Sign-out failed · ' + error.message); }
+};
+onAuthStateChanged(auth, async user => {
+  stops.forEach(stop => stop()); stops = []; session++;
+  cloud.user = null; cloud.ready = false;
+  profiles.forEach(p => { loaded[p] = false; revisions[p] = null; sequences[p] = 0; });
+  if (user && (user.email !== 'umarislah86@gmail.com' || !user.emailVerified)) {
+    message('Use umarislah86@gmail.com to sync this household.');
+    await signOut(auth); return;
+  }
+  cloud.user = user;
+  login.hidden = !!user; logout.hidden = !user;
+  dashboard.updateControls();
+  if (!user) {
+    profiles.forEach(p => dashboard.apply(p, localProfiles[p]));
+    message('Local only · sign in with Google to sync across devices'); return;
+  }
+  message('Syncing · ' + user.email);
+  const activeSession = session;
+  profiles.forEach(profile => {
+    stops.push(onSnapshot(profileRef(user.uid, profile), { includeMetadataChanges: true }, snapshot => {
+      if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+      receiveProfile(user.uid, profile, snapshot, activeSession).catch(error => {
+        if (session === activeSession) { loaded[profile] = false; cloud.ready = false; dashboard.updateControls(); message('Sync failed · ' + error.message); }
+      });
+    }, error => { cloud.ready = false; dashboard.updateControls(); message('Sync failed · ' + error.message); }));
+  });
+});
+window.addEventListener('offline', () => message('Offline · reconnect to sync and import'));
+window.addEventListener('online', () => { if (cloud.user) message('Reconnecting to cloud…'); });
+
 </script></body></html>
 
 
