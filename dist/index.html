@@ -187,9 +187,9 @@ function readyState() {
   dashboard.updateControls();
   if (cloud.ready && !uploading) message('Synced · ' + cloud.user.email + ' · both profiles');
 }
-function profileRef(uid, profile) { return doc(db, 'duit30Users', uid, 'profiles', profile); }
+function profileRef(uid, profile) { return doc(db, 'duit30Households', 'main', 'profiles', profile); }
 function chunkRef(uid, profile, revision, index) {
-  return doc(db, 'duit30Users', uid, 'profiles', profile, 'revisions', revision, 'chunks', String(index));
+  return doc(db, 'duit30Households', 'main', 'profiles', profile, 'revisions', revision, 'chunks', String(index));
 }
 function splitPayload(payload) {
   // 100k UTF-16 units stay well below the Firestore 1 MiB document limit.
@@ -262,8 +262,8 @@ onAuthStateChanged(auth, async user => {
   stops.forEach(stop => stop()); stops = []; session++;
   cloud.user = null; cloud.ready = false;
   profiles.forEach(p => { loaded[p] = false; revisions[p] = null; sequences[p] = 0; });
-  if (user && (user.email !== 'umarislah86@gmail.com' || !user.emailVerified)) {
-    message('Use umarislah86@gmail.com to sync this household.');
+  if (user && (!['umarislah86@gmail.com', 'norehansalikon@gmail.com'].includes(user.email) || !user.emailVerified)) {
+    message('Use an authorized household Google account to sync.');
     await signOut(auth); return;
   }
   cloud.user = user;
