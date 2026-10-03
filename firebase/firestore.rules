@@ -5,11 +5,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function member(household) {
-      return request.auth != null && household == 'main'
-        && request.auth.token.email in ['umarislah86@gmail.com', 'norehansalikon@gmail.com']
-        && request.auth.token.email_verified == true;
-    }
+    // Public access explicitly requested by the household owner.
+    function member(household) { return household == 'main'; }
     function validProfile(profile) { return profile in ['husband', 'wife']; }
     function validPointer(data) {
       return data.keys().hasAll(['schema','revision','chunkCount','rowCount','updatedAt'])
